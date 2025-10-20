@@ -13,12 +13,14 @@ from sumry.readers import (
     read_excel,
     read_geojson,
     read_shapefile,
+    read_parquet,
+    read_geoparquet,
     detect_file_type
 )
 
 app = typer.Typer(
     name="sumry",
-    help="Summarize various data sources (CSV, Excel, GeoJSON, Shapefiles)",
+    help="Summarize various data sources (CSV, Excel, GeoJSON, Shapefiles, Parquet, GeoParquet)",
     add_completion=False
 )
 
@@ -52,7 +54,7 @@ def main(
     )
 ):
     """
-    Summarize a data file (CSV, Excel, GeoJSON, or Shapefile).
+    Summarize a data file (CSV, Excel, GeoJSON, Shapefile, Parquet, or GeoParquet).
     """
     
     # Suppress warnings and verbose output in non-verbose mode
@@ -79,6 +81,10 @@ def main(
             summary = read_geojson(file_path, verbose)
         elif file_type == "Shapefile":
             summary = read_shapefile(file_path, verbose)
+        elif file_type == "Parquet":
+            summary = read_parquet(file_path, verbose)
+        elif file_type == "GeoParquet":
+            summary = read_geoparquet(file_path, verbose)
         else:
             console.print(f"[bold red]Error:[/bold red] Handler not implemented for {file_type}")
             raise typer.Exit(1)
@@ -108,13 +114,17 @@ def display_sample_records(file_path: Path, file_type: str, sample_count: int):
             df = pd.read_csv(file_path, nrows=sample_count)
         elif file_type == "Excel":
             df = pd.read_excel(file_path, nrows=sample_count)
-        elif file_type in ["GeoJSON", "Shapefile"]:
+        elif file_type == "Parquet":
+            df = pd.read_parquet(file_path).head(sample_count)
+        elif file_type in ["GeoJSON", "Shapefile", "GeoParquet"]:
             # For spatial files, use geopandas
             if file_type == "GeoJSON":
                 gdf = gpd.read_file(file_path, rows=sample_count)
-            else:  # Shapefile
+            elif file_type == "Shapefile":
                 gdf = gpd.read_file(file_path, rows=sample_count)
-            
+            else:  # GeoParquet
+                gdf = gpd.read_parquet(file_path).head(sample_count)
+
             # Replace geometry column with placeholder
             df = gdf.copy()
             if 'geometry' in df.columns:

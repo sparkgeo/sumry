@@ -1,6 +1,7 @@
 from pathlib import Path
 import pandas as pd
 import geopandas as gpd
+import pyarrow.parquet as pq
 import json
 import warnings
 from typing import Dict, Any, Optional, List
@@ -9,7 +10,7 @@ from typing import Dict, Any, Optional, List
 def detect_file_type(file_path: Path) -> Optional[str]:
     """Detect the type of file based on its extension."""
     suffix = file_path.suffix.lower()
-    
+
     if suffix in ['.csv', '.tsv']:
         return "CSV"
     elif suffix in ['.xlsx', '.xls', '.xlsm']:
@@ -27,7 +28,22 @@ def detect_file_type(file_path: Path) -> Optional[str]:
             return "GeoJSON"
     elif suffix in ['.shp']:
         return "Shapefile"
-    
+    elif suffix in ['.parquet', '.pq']:
+        # Check if it's a GeoParquet file by looking for geometry column metadata
+        try:
+            parquet_file = pq.ParquetFile(file_path)
+            schema = parquet_file.schema_arrow
+            # Check for geo metadata in the schema
+            if schema.metadata and b'geo' in schema.metadata:
+                return "GeoParquet"
+            # Also check for geometry column
+            for field in schema:
+                if field.name == 'geometry':
+                    return "GeoParquet"
+        except:
+            pass
+        return "Parquet"
+
     return None
 
 
@@ -188,7 +204,117 @@ def read_geojson(file_path: Path, verbose: bool = False) -> Dict[str, Any]:
                     summary["statistics"][col] = {
                         "unique": gdf[col].nunique()
                     }
-    
+
+    return summary
+
+
+def read_parquet(file_path: Path, verbose: bool = False) -> Dict[str, Any]:
+    """Read and summarize a Parquet file."""
+    df = pd.read_parquet(file_path)
+
+    summary = {
+        "basic_info": {
+            "File": file_path.name,
+            "Rows": len(df),
+            "Columns": len(df.columns),
+            "Memory Usage": f"{df.memory_usage(deep=True).sum() / 1024:.2f} KB"
+        },
+        "columns": []
+    }
+
+    for col in df.columns:
+        col_info = {
+            "name": col,
+            "type": str(df[col].dtype)
+        }
+        summary["columns"].append(col_info)
+
+    if verbose:
+        summary["sample_values"] = {}
+        summary["statistics"] = {}
+
+        for col in df.columns:
+            summary["sample_values"][col] = df[col].dropna().head(5).tolist()
+
+            if pd.api.types.is_numeric_dtype(df[col]):
+                summary["statistics"][col] = {
+                    "min": float(df[col].min()) if not pd.isna(df[col].min()) else None,
+                    "max": float(df[col].max()) if not pd.isna(df[col].max()) else None,
+                    "mean": float(df[col].mean()) if not pd.isna(df[col].mean()) else None,
+                    "unique": df[col].nunique()
+                }
+            else:
+                summary["statistics"][col] = {
+                    "unique": df[col].nunique(),
+                    "most_common": df[col].value_counts().head(1).index[0] if not df[col].empty else None
+                }
+
+    return summary
+
+
+def read_geoparquet(file_path: Path, verbose: bool = False) -> Dict[str, Any]:
+    """Read and summarize a GeoParquet file."""
+    if not verbose:
+        warnings.filterwarnings('ignore')
+
+    gdf = gpd.read_parquet(file_path)
+
+    summary = {
+        "basic_info": {
+            "File": file_path.name,
+            "Features": len(gdf),
+            "CRS": str(gdf.crs) if gdf.crs else "None",
+            "Memory Usage": f"{gdf.memory_usage(deep=True).sum() / 1024:.2f} KB"
+        },
+        "columns": [],
+        "geometry_info": {}
+    }
+
+    for col in gdf.columns:
+        if col != 'geometry':
+            col_info = {
+                "name": col,
+                "type": str(gdf[col].dtype)
+            }
+            summary["columns"].append(col_info)
+
+    if 'geometry' in gdf.columns:
+        geom_types = gdf.geometry.geom_type.value_counts()
+        bounds = gdf.total_bounds
+
+        # Calculate area and length with warning suppression
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            area_sum = gdf.geometry.area.sum() if gdf.geometry.geom_type.iloc[0] in ['Polygon', 'MultiPolygon'] else None
+            length_sum = gdf.geometry.length.sum() if gdf.geometry.geom_type.iloc[0] in ['LineString', 'MultiLineString'] else None
+
+        summary["geometry_info"] = {
+            "Geometry Types": ", ".join(f"{t}: {c}" for t, c in geom_types.items()),
+            "Bounds (minx, miny, maxx, maxy)": f"[{bounds[0]:.6f}, {bounds[1]:.6f}, {bounds[2]:.6f}, {bounds[3]:.6f}]",
+            "Total Area": f"{area_sum:.6f}" if area_sum is not None else "N/A",
+            "Total Length": f"{length_sum:.6f}" if length_sum is not None else "N/A"
+        }
+
+    if verbose:
+        summary["sample_values"] = {}
+        summary["statistics"] = {}
+
+        for col in gdf.columns:
+            if col != 'geometry':
+                summary["sample_values"][col] = gdf[col].dropna().head(5).tolist()
+
+                if pd.api.types.is_numeric_dtype(gdf[col]):
+                    summary["statistics"][col] = {
+                        "min": float(gdf[col].min()) if not pd.isna(gdf[col].min()) else None,
+                        "max": float(gdf[col].max()) if not pd.isna(gdf[col].max()) else None,
+                        "mean": float(gdf[col].mean()) if not pd.isna(gdf[col].mean()) else None,
+                        "unique": gdf[col].nunique()
+                    }
+                else:
+                    summary["statistics"][col] = {
+                        "unique": gdf[col].nunique()
+                    }
+
     return summary
 
 
