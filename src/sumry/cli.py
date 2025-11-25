@@ -93,7 +93,7 @@ def main(
         
         # Display sample records if requested
         if sample is not None or show_sample:
-            sample_count = sample if sample and sample > 0 else 5
+            sample_count = sample if sample is not None and sample != 0 else 5
             display_sample_records(file_path, file_type, sample_count)
         
     except Exception as e:
@@ -102,28 +102,51 @@ def main(
 
 
 def display_sample_records(file_path: Path, file_type: str, sample_count: int):
-    """Display sample records from the file."""
+    """Display sample records from the file.
+
+    Args:
+        sample_count: Number of records to show. Positive for first N, negative for last N.
+    """
     import pandas as pd
     import geopandas as gpd
-    
-    console.print(f"\n[bold cyan]Sample Records (first {sample_count}):[/bold cyan]")
-    
+
+    # Determine if we're showing first or last records
+    show_last = sample_count < 0
+    abs_count = abs(sample_count)
+    position = "last" if show_last else "first"
+
+    console.print(f"\n[bold cyan]Sample Records ({position} {abs_count}):[/bold cyan]")
+
     try:
         # Read the data based on file type
         if file_type == "CSV":
-            df = pd.read_csv(file_path, nrows=sample_count)
+            if show_last:
+                df = pd.read_csv(file_path).tail(abs_count)
+            else:
+                df = pd.read_csv(file_path, nrows=abs_count)
         elif file_type == "Excel":
-            df = pd.read_excel(file_path, nrows=sample_count)
+            if show_last:
+                df = pd.read_excel(file_path).tail(abs_count)
+            else:
+                df = pd.read_excel(file_path, nrows=abs_count)
         elif file_type == "Parquet":
-            df = pd.read_parquet(file_path).head(sample_count)
+            full_df = pd.read_parquet(file_path)
+            df = full_df.tail(abs_count) if show_last else full_df.head(abs_count)
         elif file_type in ["GeoJSON", "Shapefile", "GeoParquet"]:
             # For spatial files, use geopandas
             if file_type == "GeoJSON":
-                gdf = gpd.read_file(file_path, rows=sample_count)
+                if show_last:
+                    gdf = gpd.read_file(file_path).tail(abs_count)
+                else:
+                    gdf = gpd.read_file(file_path, rows=abs_count)
             elif file_type == "Shapefile":
-                gdf = gpd.read_file(file_path, rows=sample_count)
+                if show_last:
+                    gdf = gpd.read_file(file_path).tail(abs_count)
+                else:
+                    gdf = gpd.read_file(file_path, rows=abs_count)
             else:  # GeoParquet
-                gdf = gpd.read_parquet(file_path).head(sample_count)
+                full_gdf = gpd.read_parquet(file_path)
+                gdf = full_gdf.tail(abs_count) if show_last else full_gdf.head(abs_count)
 
             # Replace geometry column with placeholder
             df = gdf.copy()
