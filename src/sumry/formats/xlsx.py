@@ -82,18 +82,33 @@ class XLSX(BaseFormat):
         
         # Read sample data from the specified layer
         try:
-            sample_query = f"""
-                SELECT * FROM st_read('{self.file}', layer='{self.layer}')
-                LIMIT {count}
-            """
-            df = duckdb.sql(sample_query).df()
-            
+            abs_count = abs(count)
+
+            if count < 0:
+                # Get last N records by using row number and ordering
+                sample_query = f"""
+                    SELECT * EXCLUDE (_rn) FROM (
+                        SELECT *, ROW_NUMBER() OVER () as _rn
+                        FROM st_read('{self.file}', layer='{self.layer}')
+                    ) ORDER BY _rn DESC LIMIT {abs_count}
+                """
+                df = duckdb.sql(sample_query).df()
+                # Reverse to show in original order
+                df = df.iloc[::-1].reset_index(drop=True)
+            else:
+                sample_query = f"""
+                    SELECT * FROM st_read('{self.file}', layer='{self.layer}')
+                    LIMIT {abs_count}
+                """
+                df = duckdb.sql(sample_query).df()
+
             if df.empty:
                 console.print(f"[yellow]No data found in layer '{self.layer}'[/yellow]")
                 return
-            
+
+            position = "last" if count < 0 else "first"
             # Create a Rich table
-            table = Table(title=f"Sample data from '{self.layer}' (showing {min(count, len(df))} of {count} requested records)")
+            table = Table(title=f"Sample data from '{self.layer}' (showing {position} {len(df)} records)")
             
             # Add columns to the table
             for col in df.columns:

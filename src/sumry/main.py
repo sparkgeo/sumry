@@ -18,7 +18,7 @@ def info(
 def sample(
     file: str = typer.Argument(..., help="Source file."),
     layer: str = typer.Argument(None, help="Layer name."),
-    count: int = typer.Option(5, "--count", "-n", help="Number of sample records to display."),
+    count: int = typer.Option(5, "--count", "-n", help="Number of sample records to display. Use negative values to show records from the end (e.g., -5 for last 5 records)."),
 ):
     xlsx = XLSX(file, layer=layer)
     xlsx.sample(count=count)
