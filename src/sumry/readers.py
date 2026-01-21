@@ -404,7 +404,8 @@ def read_raster(file_path: Path, verbose: bool = False) -> Dict[str, Any]:
     """Read and summarize a raster file (GeoTIFF, NetCDF, etc.) using rasterio.
 
     Extracts gdalinfo-like metadata including driver, dimensions, CRS, bounds,
-    pixel size, and per-band information.
+    pixel size, and per-band information. For files with subdatasets (like NetCDF),
+    includes subdataset information.
     """
     with rasterio.open(file_path) as src:
         # Get file size
@@ -436,6 +437,31 @@ def read_raster(file_path: Path, verbose: bool = False) -> Dict[str, Any]:
                 "Interleave": src.interleaving.value if src.interleaving else "N/A"
             }
         }
+
+        # Check for subdatasets (common in NetCDF, HDF files)
+        subdatasets = src.subdatasets
+        if subdatasets:
+            summary["subdatasets"] = []
+            for subdataset in subdatasets:
+                # Extract variable name from subdataset path (e.g., "netcdf:file.nc:var_name")
+                var_name = subdataset.split(":")[-1] if ":" in subdataset else subdataset
+                subdataset_info = {
+                    "name": var_name,
+                    "path": subdataset
+                }
+                # Get more details by opening the subdataset
+                try:
+                    with rasterio.open(subdataset) as sub_src:
+                        subdataset_info["size"] = f"{sub_src.width} x {sub_src.height}"
+                        subdataset_info["bands"] = sub_src.count
+                        subdataset_info["dtype"] = str(sub_src.dtypes[0]) if sub_src.count > 0 else "N/A"
+                        subdataset_info["crs"] = str(sub_src.crs) if sub_src.crs else "None"
+                except Exception:
+                    subdataset_info["size"] = "N/A"
+                    subdataset_info["bands"] = "N/A"
+                    subdataset_info["dtype"] = "N/A"
+                    subdataset_info["crs"] = "N/A"
+                summary["subdatasets"].append(subdataset_info)
 
         # Collect band information
         for band_idx in range(1, src.count + 1):

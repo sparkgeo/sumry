@@ -217,45 +217,74 @@ def display_raster_sample(file_path: Path, sample_count: int):
 
     try:
         with rasterio.open(file_path) as src:
-            # Calculate window dimensions (try to make it roughly square)
-            import math
-            side = int(math.ceil(math.sqrt(abs_count)))
-            width = min(side, src.width)
-            height = min(int(math.ceil(abs_count / width)), src.height)
-
-            # Calculate window position
-            if show_last:
-                # Bottom-right corner
-                col_off = max(0, src.width - width)
-                row_off = max(0, src.height - height)
+            # Check if we have subdatasets but no bands in the main dataset
+            if src.count == 0 and src.subdatasets:
+                # Display samples from each subdataset
+                for subdataset in src.subdatasets:
+                    var_name = subdataset.split(":")[-1] if ":" in subdataset else subdataset
+                    try:
+                        with rasterio.open(subdataset) as sub_src:
+                            _display_raster_sample_from_source(sub_src, var_name, abs_count, show_last)
+                    except Exception as e:
+                        console.print(f"[yellow]Could not read subdataset {var_name}: {str(e)}[/yellow]")
+            elif src.count > 0:
+                # Display samples from the main dataset bands
+                _display_raster_sample_from_source(src, file_path.name, abs_count, show_last)
             else:
-                # Top-left corner
-                col_off = 0
-                row_off = 0
-
-            window = rasterio.windows.Window(col_off, row_off, width, height)
-
-            # Create table
-            table = Table(show_header=True, box=ROUNDED)
-            table.add_column("Band", style="green")
-            table.add_column("Sample Values", style="white")
-
-            # Read and display sample values for each band
-            for band_idx in range(1, src.count + 1):
-                band_data = src.read(band_idx, window=window)
-                # Flatten and take up to abs_count values
-                flat_values = band_data.flatten()[:abs_count]
-                # Format values appropriately
-                if band_data.dtype in ['float32', 'float64']:
-                    values_str = ", ".join(f"{v:.4f}" for v in flat_values)
-                else:
-                    values_str = ", ".join(str(v) for v in flat_values)
-                table.add_row(f"Band {band_idx}", values_str)
-
-            console.print(table)
+                console.print("[yellow]No bands or subdatasets found in raster file[/yellow]")
 
     except Exception as e:
         console.print(f"[red]Error displaying raster sample: {str(e)}[/red]")
+
+
+def _display_raster_sample_from_source(src, name: str, abs_count: int, show_last: bool):
+    """Helper function to display sample pixel values from a rasterio source.
+
+    Args:
+        src: An open rasterio dataset.
+        name: Name to display for this dataset/subdataset.
+        abs_count: Number of pixels to sample.
+        show_last: If True, sample from bottom-right; otherwise top-left.
+    """
+    import math
+    from rich.box import ROUNDED
+
+    # Calculate window dimensions (try to make it roughly square)
+    side = int(math.ceil(math.sqrt(abs_count)))
+    width = min(side, src.width)
+    height = min(int(math.ceil(abs_count / width)), src.height)
+
+    # Calculate window position
+    if show_last:
+        # Bottom-right corner
+        col_off = max(0, src.width - width)
+        row_off = max(0, src.height - height)
+    else:
+        # Top-left corner
+        col_off = 0
+        row_off = 0
+
+    import rasterio.windows
+    window = rasterio.windows.Window(col_off, row_off, width, height)
+
+    # Create table
+    table = Table(show_header=True, box=ROUNDED, title=f"[bold]{name}[/bold]")
+    table.add_column("Band", style="green")
+    table.add_column("Sample Values", style="white")
+
+    # Read and display sample values for each band
+    for band_idx in range(1, src.count + 1):
+        band_data = src.read(band_idx, window=window)
+        # Flatten and take up to abs_count values
+        flat_values = band_data.flatten()[:abs_count]
+        # Format values appropriately
+        if band_data.dtype in ['float32', 'float64']:
+            values_str = ", ".join(f"{v:.4f}" for v in flat_values)
+        else:
+            values_str = ", ".join(str(v) for v in flat_values)
+        table.add_row(f"Band {band_idx}", values_str)
+
+    console.print(table)
 
 
 def display_summary(summary: dict, file_type: str, verbose: bool):
@@ -329,6 +358,25 @@ def display_summary(summary: dict, file_type: str, verbose: bool):
             geo_table.add_row(key, str(value))
 
         console.print(geo_table)
+
+    # Display subdataset information for raster files (NetCDF, HDF, etc.)
+    if "subdatasets" in summary and summary["subdatasets"]:
+        console.print("\n[bold cyan]Subdatasets:[/bold cyan]")
+        sub_table = Table(show_header=True, box=None)
+        sub_table.add_column("Name", style="green")
+        sub_table.add_column("Size", style="yellow")
+        sub_table.add_column("Bands", style="white")
+        sub_table.add_column("Type", style="white")
+
+        for sub_info in summary["subdatasets"]:
+            sub_table.add_row(
+                sub_info["name"],
+                str(sub_info["size"]),
+                str(sub_info["bands"]),
+                str(sub_info["dtype"])
+            )
+
+        console.print(sub_table)
 
     # Display band information for raster files
     if "bands" in summary and summary["bands"]:
