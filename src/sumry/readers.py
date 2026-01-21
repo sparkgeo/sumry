@@ -2,8 +2,10 @@ from pathlib import Path
 import pandas as pd
 import geopandas as gpd
 import pyarrow.parquet as pq
+import rasterio
 import json
 import warnings
+import os
 from typing import Dict, Any, Optional, List
 
 
@@ -43,6 +45,20 @@ def detect_file_type(file_path: Path) -> Optional[str]:
         except:
             pass
         return "Parquet"
+    elif suffix in ['.tif', '.tiff', '.img', '.nc', '.hdf', '.vrt', '.asc', '.dem']:
+        # Known raster extensions - verify with rasterio
+        try:
+            with rasterio.open(file_path) as src:
+                return "Raster"
+        except:
+            pass
+
+    # Try rasterio for unknown extensions that might be GDAL-supported rasters
+    try:
+        with rasterio.open(file_path) as src:
+            return "Raster"
+    except:
+        pass
 
     return None
 
@@ -322,9 +338,9 @@ def read_shapefile(file_path: Path, verbose: bool = False) -> Dict[str, Any]:
     """Read and summarize a Shapefile."""
     if not verbose:
         warnings.filterwarnings('ignore')
-    
+
     gdf = gpd.read_file(file_path)
-    
+
     summary = {
         "basic_info": {
             "File": file_path.name,
@@ -335,7 +351,7 @@ def read_shapefile(file_path: Path, verbose: bool = False) -> Dict[str, Any]:
         "columns": [],
         "geometry_info": {}
     }
-    
+
     for col in gdf.columns:
         if col != 'geometry':
             col_info = {
@@ -343,32 +359,32 @@ def read_shapefile(file_path: Path, verbose: bool = False) -> Dict[str, Any]:
                 "type": str(gdf[col].dtype)
             }
             summary["columns"].append(col_info)
-    
+
     if 'geometry' in gdf.columns:
         geom_types = gdf.geometry.geom_type.value_counts()
         bounds = gdf.total_bounds
-        
+
         # Calculate area and length with warning suppression
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             area_sum = gdf.geometry.area.sum() if gdf.geometry.geom_type.iloc[0] in ['Polygon', 'MultiPolygon'] else None
             length_sum = gdf.geometry.length.sum() if gdf.geometry.geom_type.iloc[0] in ['LineString', 'MultiLineString'] else None
-        
+
         summary["geometry_info"] = {
             "Geometry Types": ", ".join(f"{t}: {c}" for t, c in geom_types.items()),
             "Bounds (minx, miny, maxx, maxy)": f"[{bounds[0]:.6f}, {bounds[1]:.6f}, {bounds[2]:.6f}, {bounds[3]:.6f}]",
             "Total Area": f"{area_sum:.6f}" if area_sum is not None else "N/A",
             "Total Length": f"{length_sum:.6f}" if length_sum is not None else "N/A"
         }
-    
+
     if verbose:
         summary["sample_values"] = {}
         summary["statistics"] = {}
-        
+
         for col in gdf.columns:
             if col != 'geometry':
                 summary["sample_values"][col] = gdf[col].dropna().head(5).tolist()
-                
+
                 if pd.api.types.is_numeric_dtype(gdf[col]):
                     summary["statistics"][col] = {
                         "min": float(gdf[col].min()) if not pd.isna(gdf[col].min()) else None,
@@ -380,3 +396,84 @@ def read_shapefile(file_path: Path, verbose: bool = False) -> Dict[str, Any]:
                     summary["statistics"][col] = {
                         "unique": gdf[col].nunique()
                     }
+
+    return summary
+
+
+def read_raster(file_path: Path, verbose: bool = False) -> Dict[str, Any]:
+    """Read and summarize a raster file (GeoTIFF, NetCDF, etc.) using rasterio.
+
+    Extracts gdalinfo-like metadata including driver, dimensions, CRS, bounds,
+    pixel size, and per-band information.
+    """
+    with rasterio.open(file_path) as src:
+        # Get file size
+        file_size_bytes = os.path.getsize(file_path)
+        if file_size_bytes >= 1024 * 1024 * 1024:
+            file_size_str = f"{file_size_bytes / (1024 * 1024 * 1024):.2f} GB"
+        elif file_size_bytes >= 1024 * 1024:
+            file_size_str = f"{file_size_bytes / (1024 * 1024):.2f} MB"
+        else:
+            file_size_str = f"{file_size_bytes / 1024:.2f} KB"
+
+        # Get bounds
+        bounds = src.bounds
+
+        summary = {
+            "basic_info": {
+                "File": file_path.name,
+                "Driver": f"{src.driver}",
+                "Size": f"{src.width} x {src.height} pixels",
+                "Bands": src.count,
+                "CRS": str(src.crs) if src.crs else "None",
+                "Bounds": f"[{bounds.left:.6f}, {bounds.bottom:.6f}, {bounds.right:.6f}, {bounds.top:.6f}]",
+                "Pixel Size": f"({src.res[0]:.6f}, {src.res[1]:.6f})",
+                "File Size": file_size_str
+            },
+            "bands": [],
+            "raster_info": {
+                "Transform": str(src.transform),
+                "Interleave": src.interleaving.value if src.interleaving else "N/A"
+            }
+        }
+
+        # Collect band information
+        for band_idx in range(1, src.count + 1):
+            band_info = {
+                "number": band_idx,
+                "dtype": str(src.dtypes[band_idx - 1]),
+                "nodata": src.nodatavals[band_idx - 1] if src.nodatavals[band_idx - 1] is not None else "None",
+                "color": src.colorinterp[band_idx - 1].name if src.colorinterp else "undefined"
+            }
+            summary["bands"].append(band_info)
+
+        # Verbose mode: compute band statistics
+        if verbose:
+            summary["band_statistics"] = []
+            for band_idx in range(1, src.count + 1):
+                band_data = src.read(band_idx, masked=True)
+
+                # Compute statistics on valid data
+                if band_data.count() > 0:
+                    stats = {
+                        "band": band_idx,
+                        "min": float(band_data.min()),
+                        "max": float(band_data.max()),
+                        "mean": float(band_data.mean()),
+                        "std": float(band_data.std())
+                    }
+                else:
+                    stats = {
+                        "band": band_idx,
+                        "min": "N/A",
+                        "max": "N/A",
+                        "mean": "N/A",
+                        "std": "N/A"
+                    }
+                summary["band_statistics"].append(stats)
+
+            # Add metadata tags
+            if src.tags():
+                summary["metadata"] = dict(src.tags())
+
+    return summary

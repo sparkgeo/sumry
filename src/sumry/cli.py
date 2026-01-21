@@ -15,12 +15,13 @@ from sumry.readers import (
     read_shapefile,
     read_parquet,
     read_geoparquet,
+    read_raster,
     detect_file_type
 )
 
 app = typer.Typer(
     name="sumry",
-    help="Summarize various data sources (CSV, Excel, GeoJSON, Shapefiles, Parquet, GeoParquet)",
+    help="Summarize various data sources (CSV, Excel, GeoJSON, Shapefiles, Parquet, GeoParquet, Raster)",
     add_completion=False
 )
 
@@ -54,7 +55,7 @@ def main(
     )
 ):
     """
-    Summarize a data file (CSV, Excel, GeoJSON, Shapefile, Parquet, or GeoParquet).
+    Summarize a data file (CSV, Excel, GeoJSON, Shapefile, Parquet, GeoParquet, or Raster).
     """
     
     # Suppress warnings and verbose output in non-verbose mode
@@ -85,16 +86,21 @@ def main(
             summary = read_parquet(file_path, verbose)
         elif file_type == "GeoParquet":
             summary = read_geoparquet(file_path, verbose)
+        elif file_type == "Raster":
+            summary = read_raster(file_path, verbose)
         else:
             console.print(f"[bold red]Error:[/bold red] Handler not implemented for {file_type}")
             raise typer.Exit(1)
-            
+
         display_summary(summary, file_type, verbose)
-        
-        # Display sample records if requested
+
+        # Display sample records/pixels if requested
         if sample is not None or show_sample:
             sample_count = sample if sample is not None and sample != 0 else 5
-            display_sample_records(file_path, file_type, sample_count)
+            if file_type == "Raster":
+                display_raster_sample(file_path, sample_count)
+            else:
+                display_sample_records(file_path, file_type, sample_count)
         
     except Exception as e:
         console.print(f"[bold red]Error reading file:[/bold red] {str(e)}")
@@ -191,6 +197,67 @@ def display_sample_records(file_path: Path, file_type: str, sample_count: int):
         console.print(f"[red]Error displaying sample records: {str(e)}[/red]")
 
 
+def display_raster_sample(file_path: Path, sample_count: int):
+    """Display sample pixel values from a raster file.
+
+    Args:
+        file_path: Path to the raster file.
+        sample_count: Number of pixels to show. Positive for top-left corner,
+                      negative for bottom-right corner.
+    """
+    import rasterio
+    from rich.box import ROUNDED
+
+    # Determine if we're showing from top-left or bottom-right
+    show_last = sample_count < 0
+    abs_count = abs(sample_count)
+    position = "bottom-right" if show_last else "top-left"
+
+    console.print(f"\n[bold cyan]Sample Pixel Values ({position}, {abs_count} pixels):[/bold cyan]")
+
+    try:
+        with rasterio.open(file_path) as src:
+            # Calculate window dimensions (try to make it roughly square)
+            import math
+            side = int(math.ceil(math.sqrt(abs_count)))
+            width = min(side, src.width)
+            height = min(int(math.ceil(abs_count / width)), src.height)
+
+            # Calculate window position
+            if show_last:
+                # Bottom-right corner
+                col_off = max(0, src.width - width)
+                row_off = max(0, src.height - height)
+            else:
+                # Top-left corner
+                col_off = 0
+                row_off = 0
+
+            window = rasterio.windows.Window(col_off, row_off, width, height)
+
+            # Create table
+            table = Table(show_header=True, box=ROUNDED)
+            table.add_column("Band", style="green")
+            table.add_column("Sample Values", style="white")
+
+            # Read and display sample values for each band
+            for band_idx in range(1, src.count + 1):
+                band_data = src.read(band_idx, window=window)
+                # Flatten and take up to abs_count values
+                flat_values = band_data.flatten()[:abs_count]
+                # Format values appropriately
+                if band_data.dtype in ['float32', 'float64']:
+                    values_str = ", ".join(f"{v:.4f}" for v in flat_values)
+                else:
+                    values_str = ", ".join(str(v) for v in flat_values)
+                table.add_row(f"Band {band_idx}", values_str)
+
+            console.print(table)
+
+    except Exception as e:
+        console.print(f"[red]Error displaying raster sample: {str(e)}[/red]")
+
+
 def display_summary(summary: dict, file_type: str, verbose: bool):
     """Display the file summary using Rich formatting."""
     
@@ -257,11 +324,75 @@ def display_summary(summary: dict, file_type: str, verbose: bool):
         geo_table = Table(show_header=False, box=None, padding=(0, 2))
         geo_table.add_column("Property", style="cyan", no_wrap=True)
         geo_table.add_column("Value", style="white")
-        
+
         for key, value in summary["geometry_info"].items():
             geo_table.add_row(key, str(value))
-        
+
         console.print(geo_table)
+
+    # Display band information for raster files
+    if "bands" in summary and summary["bands"]:
+        console.print("\n[bold cyan]Bands:[/bold cyan]")
+        band_table = Table(show_header=True, box=None)
+        band_table.add_column("Band", style="green")
+        band_table.add_column("Type", style="yellow")
+        band_table.add_column("NoData", style="white")
+        band_table.add_column("Color", style="white")
+
+        for band_info in summary["bands"]:
+            band_table.add_row(
+                str(band_info["number"]),
+                band_info["dtype"],
+                str(band_info["nodata"]),
+                band_info["color"]
+            )
+
+        console.print(band_table)
+
+    # Display raster info
+    if "raster_info" in summary:
+        console.print("\n[bold cyan]Raster Information:[/bold cyan]")
+        raster_table = Table(show_header=False, box=None, padding=(0, 2))
+        raster_table.add_column("Property", style="cyan", no_wrap=True)
+        raster_table.add_column("Value", style="white")
+
+        for key, value in summary["raster_info"].items():
+            raster_table.add_row(key, str(value))
+
+        console.print(raster_table)
+
+    # Display band statistics in verbose mode
+    if verbose and "band_statistics" in summary:
+        console.print("\n[bold cyan]Band Statistics:[/bold cyan]")
+        stats_table = Table(show_header=True, box=None)
+        stats_table.add_column("Band", style="green")
+        stats_table.add_column("Min", style="yellow")
+        stats_table.add_column("Max", style="yellow")
+        stats_table.add_column("Mean", style="yellow")
+        stats_table.add_column("Std Dev", style="yellow")
+
+        for stats in summary["band_statistics"]:
+            stats_table.add_row(
+                str(stats["band"]),
+                str(stats["min"]),
+                str(stats["max"]),
+                str(stats["mean"]),
+                str(stats["std"])
+            )
+
+        console.print(stats_table)
+
+    # Display raster metadata in verbose mode
+    if verbose and "metadata" in summary:
+        console.print("\n[bold cyan]Metadata:[/bold cyan]")
+        meta_table = Table(show_header=False, box=None, padding=(0, 2))
+        meta_table.add_column("Key", style="cyan", no_wrap=True)
+        meta_table.add_column("Value", style="white")
+
+        for key, value in summary["metadata"].items():
+            meta_table.add_row(key, str(value))
+
+        console.print(meta_table)
 
 
 if __name__ == "__main__":

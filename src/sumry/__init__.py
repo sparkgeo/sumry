@@ -9,6 +9,9 @@ from sumry.readers import (
     read_excel,
     read_geojson,
     read_shapefile,
+    read_parquet,
+    read_geoparquet,
+    read_raster,
     detect_file_type,
 )
 
@@ -17,6 +20,9 @@ __all__ = [
     "read_excel",
     "read_geojson",
     "read_shapefile",
+    "read_parquet",
+    "read_geoparquet",
+    "read_raster",
     "detect_file_type",
     "__version__",
 ]
