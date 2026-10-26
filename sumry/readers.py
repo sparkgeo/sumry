@@ -1,6 +1,7 @@
 from pathlib import Path
 import pandas as pd
 import geopandas as gpd
+import pyogrio
 import json
 import warnings
 from typing import Dict, Any, Optional, List
@@ -14,6 +15,10 @@ def detect_file_type(file_path: Path) -> Optional[str]:
         return "CSV"
     elif suffix in ['.xlsx', '.xls', '.xlsm']:
         return "Excel"
+    elif suffix == '.parquet':
+        return "Parquet"
+    elif suffix == '.gpkg':
+        return "GeoPackage"
     elif suffix in ['.geojson', '.json']:
         if suffix == '.json':
             try:
@@ -28,12 +33,37 @@ def detect_file_type(file_path: Path) -> Optional[str]:
     elif suffix in ['.shp']:
         return "Shapefile"
     
+    elif suffix in ['.tif', '.tiff', '.jp2', '.j2k', '.jpx']:
+        return "Raster"
+    elif suffix in ['.las', '.laz', '.copc']:
+        return "Point Cloud"
+    elif suffix == '.pmtiles':
+        return "PMTiles"
+    elif suffix == '.fgb':
+        return "FlatGeobuf"
+
     return None
+
+
+def read_flatgeobuf(file_path: Path, verbose: bool = False, sample_count: Optional[int] = None) -> Dict[str, Any]:
+    """Summarize FlatGeobuf using the shared vector summary."""
+    return _summarize_geodataframe(gpd.read_file(file_path, engine="pyogrio"), file_path, verbose, sample_count)
 
 
 def read_csv(file_path: Path, verbose: bool = False, sample_count: Optional[int] = None) -> Dict[str, Any]:
     """Read and summarize a CSV file."""
     df = pd.read_csv(file_path)
+    return _summarize_dataframe(df, file_path, verbose, sample_count)
+
+
+def read_parquet(file_path: Path, verbose: bool = False, sample_count: Optional[int] = None) -> Dict[str, Any]:
+    """Read and summarize a Parquet file."""
+    df = pd.read_parquet(file_path, engine="pyarrow")
+    return _summarize_dataframe(df, file_path, verbose, sample_count)
+
+
+def _summarize_dataframe(df: pd.DataFrame, file_path: Path, verbose: bool, sample_count: Optional[int]) -> Dict[str, Any]:
+    """Build a tabular file summary from a DataFrame."""
     
     summary = {
         "basic_info": {
@@ -67,9 +97,10 @@ def read_csv(file_path: Path, verbose: bool = False, sample_count: Optional[int]
                     "unique": df[col].nunique()
                 }
             else:
+                counts = df[col].value_counts()
                 summary["statistics"][col] = {
                     "unique": df[col].nunique(),
-                    "most_common": df[col].value_counts().head(1).index[0] if not df[col].empty else None
+                    "most_common": counts.index[0] if not counts.empty else None
                 }
     
     # Add sample data if requested
@@ -194,6 +225,57 @@ def read_geojson(file_path: Path, verbose: bool = False, sample_count: Optional[
         warnings.filterwarnings('ignore')
     
     gdf = gpd.read_file(file_path)
+    return _summarize_geodataframe(gdf, file_path, verbose, sample_count)
+
+
+def read_geopackage(file_path: Path, verbose: bool = False, select: Optional[str] = None, sample_count: Optional[int] = None) -> Dict[str, Any]:
+    """Summarize the first GeoPackage layer, or selected names/zero-based indices."""
+    layer_names = [name for name, _ in pyogrio.list_layers(file_path)]
+    if not layer_names:
+        raise ValueError("GeoPackage has no readable vector or attribute layers")
+
+    selected = []
+    for token in select.split(',') if select is not None else [layer_names[0]]:
+        token = token.strip()
+        if token in layer_names:
+            name = token
+        elif token.isdigit() and int(token) < len(layer_names):
+            name = layer_names[int(token)]
+        else:
+            raise ValueError(f"Unknown layer {token!r}. Available layers: {', '.join(layer_names)}")
+        if name not in selected:
+            selected.append(name)
+
+    summaries = {}
+    for name in selected:
+        frame = gpd.read_file(file_path, layer=name, engine="pyogrio")
+        if isinstance(frame, gpd.GeoDataFrame):
+            summary = _summarize_geodataframe(frame, file_path, verbose, sample_count)
+        else:
+            summary = _summarize_dataframe(frame, file_path, verbose, sample_count)
+        summary["basic_info"]["Layer"] = name
+        summaries[name] = summary
+
+    if len(selected) == 1:
+        summary = summaries[selected[0]]
+        summary["basic_info"].update({
+            "Total Layers": len(layer_names),
+            "All Layer Names": ", ".join(layer_names),
+        })
+        return summary
+    return {
+        "basic_info": {
+            "File": file_path.name,
+            "Total Layers": len(layer_names),
+            "Selected Layers": len(selected),
+            "Layer Names": ", ".join(selected),
+        },
+        "layers": summaries,
+    }
+
+
+def _summarize_geodataframe(gdf: gpd.GeoDataFrame, file_path: Path, verbose: bool, sample_count: Optional[int]) -> Dict[str, Any]:
+    """Build a summary of a spatial layer, including empty layers."""
     
     summary = {
         "basic_info": {
@@ -221,8 +303,8 @@ def read_geojson(file_path: Path, verbose: bool = False, sample_count: Optional[
         # Calculate area and length with warning suppression
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            area_sum = gdf.geometry.area.sum() if gdf.geometry.geom_type.iloc[0] in ['Polygon', 'MultiPolygon'] else None
-            length_sum = gdf.geometry.length.sum() if gdf.geometry.geom_type.iloc[0] in ['LineString', 'MultiLineString'] else None
+            area_sum = gdf.geometry.area.sum() if geom_types.index.isin(['Polygon', 'MultiPolygon']).any() else None
+            length_sum = gdf.geometry.length.sum() if geom_types.index.isin(['LineString', 'MultiLineString']).any() else None
         
         summary["geometry_info"] = {
             "Geometry Types": ", ".join(f"{t}: {c}" for t, c in geom_types.items()),

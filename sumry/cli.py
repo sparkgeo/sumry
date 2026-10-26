@@ -18,20 +18,45 @@ import json
 import sys
 
 from sumry.readers import (
+    read_flatgeobuf,
     read_csv,
     read_excel,
+    read_parquet,
     read_geojson,
+    read_geopackage,
     read_shapefile,
     detect_file_type
 )
 
+from sumry.spatial_readers import read_raster, read_point_cloud, read_pmtiles
+
 app = typer.Typer(
     name="sumry",
-    help="Summarize various data sources (CSV, Excel, GeoJSON, Shapefiles)",
+    help="Summarize various data sources (tables, vectors, rasters, point clouds, and tile archives)",
     add_completion=False
 )
 
 console = Console()
+
+
+def show_formats(value: bool):
+    if value:
+        table = Table(title="Supported File Formats")
+        table.add_column("Format")
+        table.add_column("Extensions")
+        table.add_row("CSV", ".csv, .tsv")
+        table.add_row("Excel", ".xlsx, .xls, .xlsm")
+        table.add_row("Parquet", ".parquet")
+        table.add_row("GeoJSON", ".geojson, .json (GeoJSON content)")
+        table.add_row("GeoPackage", ".gpkg")
+        table.add_row("Shapefile", ".shp")
+        table.add_row("GeoTIFF / COG / TIFF + worldfile", ".tif, .tiff")
+        table.add_row("JPEG2000", ".jp2, .j2k, .jpx")
+        table.add_row("LAS / LAZ / COPC", ".las, .laz, .copc")
+        table.add_row("PMTiles", ".pmtiles (v3)")
+        table.add_row("FlatGeobuf", ".fgb")
+        console.print(table)
+        raise typer.Exit()
 
 
 @app.command()
@@ -40,6 +65,14 @@ def main(
         ...,
         help="Path to the file to summarize",
         exists=True
+    ),
+    formats: bool = typer.Option(
+        False,
+        "--formats",
+        "-f",
+        help="Show supported file formats and exit",
+        callback=show_formats,
+        is_eager=True
     ),
     verbose: bool = typer.Option(
         False, 
@@ -51,7 +84,7 @@ def main(
         None,
         "--select",
         "-s",
-        help="Select specific components (e.g., sheet names for Excel, separated by commas)"
+        help="Select Excel sheets or GeoPackage layers by name or zero-based index, separated by commas"
     ),
     count: Optional[int] = typer.Option(
         None,
@@ -67,7 +100,7 @@ def main(
     )
 ):
     """
-    Summarize a data file (CSV, Excel, GeoJSON, or Shapefile).
+    Summarize a table, vector file, raster, point cloud, or tile archive.
     """
     
     # Suppress warnings and verbose output in non-verbose mode
@@ -95,37 +128,26 @@ def main(
         # Set default count to 5 if count option is used without value
         sample_count = 5 if count is not None and count <= 0 else count
         
+        readers = {
+            "CSV": read_csv, "Parquet": read_parquet, "GeoJSON": read_geojson,
+            "Shapefile": read_shapefile, "FlatGeobuf": read_flatgeobuf,
+            "Raster": read_raster, "Point Cloud": read_point_cloud,
+            "PMTiles": read_pmtiles,
+        }
+
+        def read_summary():
+            if file_type == "Excel":
+                return read_excel(file_path, verbose, select, sample_count)
+            if file_type == "GeoPackage":
+                return read_geopackage(file_path, verbose, select, sample_count)
+            return readers[file_type](file_path, verbose, sample_count)
+
         if json_output:
-            # No spinner for JSON output
-            if file_type == "CSV":
-                summary = read_csv(file_path, verbose, sample_count)
-            elif file_type == "Excel":
-                summary = read_excel(file_path, verbose, select, sample_count)
-            elif file_type == "GeoJSON":
-                summary = read_geojson(file_path, verbose, sample_count)
-            elif file_type == "Shapefile":
-                summary = read_shapefile(file_path, verbose, sample_count)
-            else:
-                console.print(f"[bold red]Error:[/bold red] Handler not implemented for {file_type}", file=sys.stderr)
-                raise typer.Exit(1)
+            summary = read_summary()
         else:
-            # Show loading spinner while reading the file
-            with console.status(f"[bold green]📂 Reading {file_type} file...[/bold green]", spinner="dots") as status:
-                if file_type == "CSV":
-                    summary = read_csv(file_path, verbose, sample_count)
-                elif file_type == "Excel":
-                    status.update(f"[bold green]📊 Reading Excel file ({select if select else 'default sheet'})...[/bold green]")
-                    summary = read_excel(file_path, verbose, select, sample_count)
-                elif file_type == "GeoJSON":
-                    status.update(f"[bold green]🌍 Reading GeoJSON file...[/bold green]")
-                    summary = read_geojson(file_path, verbose, sample_count)
-                elif file_type == "Shapefile":
-                    status.update(f"[bold green]🗺️ Reading Shapefile...[/bold green]")
-                    summary = read_shapefile(file_path, verbose, sample_count)
-                else:
-                    console.print(f"[bold red]Error:[/bold red] Handler not implemented for {file_type}")
-                    raise typer.Exit(1)
-        
+            with console.status(f"Reading {file_type} file...", spinner="dots"):
+                summary = read_summary()
+
         # Clear the line after loading (only for non-JSON output)
         if not json_output:
             console.print()
@@ -188,9 +210,13 @@ def display_summary(summary: dict, file_type: str, verbose: bool, sample_count: 
     console.print(table)
     
     # Handle multiple sheets if present
-    if "sheets" in summary:
-        console.print(Rule("[bold bright_magenta]📑 Sheets[/bold bright_magenta]", style="bright_magenta"))
-        for sheet_name, sheet_summary in summary["sheets"].items():
+    if "sheets" in summary or "layers" in summary:
+        collection = "layers" if "layers" in summary else "sheets"
+        console.print(Rule(f"[bold bright_magenta]📑 {collection.title()}[/bold bright_magenta]", style="bright_magenta"))
+        for sheet_name, sheet_summary in summary[collection].items():
+            if collection == "layers":
+                display_summary(sheet_summary, f"GeoPackage Layer: {sheet_name}", verbose, sample_count)
+                continue
             sheet_panel = Panel(
                 f"[bold bright_yellow]📄 {sheet_name}[/bold bright_yellow]",
                 border_style="yellow",
@@ -207,6 +233,23 @@ def display_summary(summary: dict, file_type: str, verbose: bool, sample_count: 
 
 def _display_sheet_summary(summary: dict, verbose: bool, sample_count: Optional[int] = None):
     """Display summary for a single sheet or file."""
+    for section in ("spatial_info", "sampling_info", "metadata"):
+        if section in summary:
+            table = Table(title=section.replace("_", " ").title(), box=ROUNDED)
+            table.add_column("Property")
+            table.add_column("Value")
+            for key, value in summary[section].items():
+                table.add_row(Text(str(key)), Text(str(value)))
+            console.print(table)
+    if summary.get("bands"):
+        table = Table(title="Bands", box=ROUNDED)
+        keys = list(summary["bands"][0])
+        for key in keys:
+            table.add_column(key)
+        for band in summary["bands"]:
+            table.add_row(*(Text(str(band[key])) for key in keys))
+        console.print(table)
+
     if "columns" in summary and summary["columns"]:
         console.print(Rule("[bold bright_cyan]🔤 Columns/Fields[/bold bright_cyan]", style="bright_cyan"))
         col_table = Table(
@@ -254,6 +297,9 @@ def _display_sheet_summary(summary: dict, verbose: bool, sample_count: Optional[
         stats_table.add_column("Max", style="cyan")
         stats_table.add_column("Mean", style="yellow")
         stats_table.add_column("Unique", style="bright_magenta")
+        if "sampling_info" in summary:
+            stats_table.add_column("Std Dev")
+            stats_table.add_column("Valid %")
         
         for col_name, stats in summary["statistics"].items():
             min_val = str(stats.get("min", "N/A"))
@@ -273,7 +319,9 @@ def _display_sheet_summary(summary: dict, verbose: bool, sample_count: Optional[
                 Text(min_val, style="cyan"),
                 Text(max_val, style="cyan"),
                 Text(mean_val, style="yellow"),
-                Text(unique_val, style="bright_magenta")
+                Text(unique_val, style="bright_magenta"),
+                *([str(stats.get("std", "N/A")), str(stats.get("valid_percent", "N/A"))]
+                  if "sampling_info" in summary else [])
             )
         
         console.print(stats_table)
@@ -298,7 +346,7 @@ def _display_sheet_summary(summary: dict, verbose: bool, sample_count: Optional[
     
     # Display sample data if count option is used
     if sample_count is not None and "sample_data" in summary:
-        console.print(Rule(f"[bold bright_yellow]📝 Sample Records (showing {sample_count})[/bold bright_yellow]", style="bright_yellow"))
+        console.print(Rule(f"[bold bright_yellow]📝 Sample Records (showing {len(summary['sample_data'])})[/bold bright_yellow]", style="bright_yellow"))
         sample_table = Table(
             show_header=True,
             box=ROUNDED,
