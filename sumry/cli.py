@@ -92,6 +92,11 @@ def main(
         "-n",
         help="Display N sample records in table format (default: 5)"
     ),
+    encoding: Optional[str] = typer.Option(
+        None,
+        "--encoding",
+        help="CSV/TSV encoding (default: UTF-8, falling back to Windows-1252)"
+    ),
     json_output: bool = typer.Option(
         False,
         "--json",
@@ -136,6 +141,10 @@ def main(
         }
 
         def read_summary():
+            if encoding is not None and file_type != "CSV":
+                raise ValueError("--encoding is only supported for CSV/TSV files")
+            if file_type == "CSV":
+                return read_csv(file_path, verbose, sample_count, encoding=encoding)
             if file_type == "Excel":
                 return read_excel(file_path, verbose, select, sample_count)
             if file_type == "GeoPackage":

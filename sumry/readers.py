@@ -50,10 +50,23 @@ def read_flatgeobuf(file_path: Path, verbose: bool = False, sample_count: Option
     return _summarize_geodataframe(gpd.read_file(file_path, engine="pyogrio"), file_path, verbose, sample_count)
 
 
-def read_csv(file_path: Path, verbose: bool = False, sample_count: Optional[int] = None) -> Dict[str, Any]:
+def read_csv(file_path: Path, verbose: bool = False, sample_count: Optional[int] = None,
+             encoding: Optional[str] = None) -> Dict[str, Any]:
     """Read and summarize a CSV file."""
-    df = pd.read_csv(file_path)
-    return _summarize_dataframe(df, file_path, verbose, sample_count)
+    selected_encoding = encoding or "utf-8-sig"
+    separator = "\t" if file_path.suffix.lower() == ".tsv" else ","
+    try:
+        df = pd.read_csv(file_path, encoding=selected_encoding, sep=separator)
+    except UnicodeDecodeError:
+        if encoding is not None:
+            raise
+        # Legacy spreadsheet exports commonly use Windows-1252. Keep decoding
+        # strict so unsupported bytes are never silently dropped or replaced.
+        selected_encoding = "cp1252"
+        df = pd.read_csv(file_path, encoding=selected_encoding, sep=separator)
+    summary = _summarize_dataframe(df, file_path, verbose, sample_count)
+    summary["basic_info"]["Encoding"] = selected_encoding
+    return summary
 
 
 def read_parquet(file_path: Path, verbose: bool = False, sample_count: Optional[int] = None) -> Dict[str, Any]:

@@ -34,6 +34,9 @@ uv sync
 # Summarize a CSV file
 uv run sumry data.csv
 
+# Override the CSV/TSV text encoding when needed
+uv run sumry data.csv --encoding latin-1
+
 # Summarize a GeoJSON file
 uv run sumry locations.geojson
 
@@ -82,6 +85,12 @@ uv run sumry data.csv -v -n 5 --json
 ```
 
 ## Output Examples
+
+CSV/TSV files are read as UTF-8 (with or without a BOM), with a Windows-1252
+fallback when UTF-8 decoding fails. The summary reports the encoding used.
+This fallback is a guess; use `--encoding` if the text looks incorrect or the
+file uses another encoding. Explicit encodings are used strictly without fallback.
+TSV files use a tab separator.
 
 ### Standard Output (CSV)
 ```
@@ -196,6 +205,7 @@ JPEG2000 requires a supporting GDAL driver, included in standard Rasterio wheels
 | `--count N` | `-n N` | Display N sample records in table format | `sumry data.csv -n 10` |
 | `--select` | `-s` | Select Excel sheets or GeoPackage layers (comma-separated names or indices) | `sumry data.gpkg -s "roads,buildings"` |
 | `--json` | `-j` | Output results in JSON format | `sumry data.csv -j` |
+| `--encoding` | | Override CSV/TSV text encoding | `sumry data.csv --encoding latin-1` |
 | `--help` | | Show help message and exit | `sumry --help` |
 
 ## Supported Formats
