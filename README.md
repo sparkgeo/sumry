@@ -15,73 +15,124 @@ A CLI utility tool for summarizing various data sources.
 
 ## Installation
 
-This project uses UV as the package manager. To install dependencies:
+sumry requires Python 3.11 or newer. The development environment uses Python 3.12.
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) first; uv can
+install Python automatically if the requested version is missing. Git is required
+for installation from the repository.
+
+### Install as a terminal tool
+
+Run these commands from any directory:
 
 ```bash
-# Clone the repository
-git clone <repository-url>
-cd sumry
-
-# Install dependencies with UV
-uv sync
+uv tool install --python 3.12 git+https://github.com/gridcell/sumry.git
+uv tool update-shell
 ```
 
+Restart your terminal after `uv tool update-shell` so the tools directory is on
+your `PATH`. You can then use `sumry` from any directory, without activating a
+virtual environment or keeping a local checkout:
+
+```bash
+sumry --help
+sumry --formats
+sumry /path/to/data.csv
+```
+
+uv installs sumry and its dependencies in an isolated environment for your user;
+no `sudo` is needed.
+
+### Install from a local checkout
+
+If you already cloned the repository, run this from its root directory:
+
+```bash
+uv tool install --python 3.12 .
+uv tool update-shell
+```
+
+Restart your terminal if the shell configuration changed. This installs a snapshot
+of the checkout. After changing the source, run `uv tool install --force .` again
+to replace that installation. For an installation that follows source edits, see
+[Development](#development).
+
+### Update or uninstall
+
+For an installation from GitHub:
+
+```bash
+uv tool upgrade sumry
+```
+
+To remove the installed tool:
+
+```bash
+uv tool uninstall sumry
+```
+
+If your shell reports `sumry: command not found`, run `uv tool update-shell` and
+restart the terminal. `uv tool list` shows installed tools, and `uv tool dir --bin`
+shows the directory that needs to be on your `PATH`.
+
 ## Usage
+
+The examples below assume you installed the terminal tool. Pass a local file path;
+quote paths containing spaces, for example `sumry "My Data/sales.csv"`.
 
 ### Basic usage
 
 ```bash
 # Summarize a CSV file
-uv run sumry data.csv
+sumry data.csv
 
 # Override the CSV/TSV text encoding when needed
-uv run sumry data.csv --encoding latin-1
+sumry data.csv --encoding latin-1
 
 # Summarize a GeoJSON file
-uv run sumry locations.geojson
+sumry locations.geojson
 
 # Summarize an Excel file
-uv run sumry spreadsheet.xlsx
+sumry spreadsheet.xlsx
 
 # Summarize a Parquet file (also supports --verbose, --count, and --json)
-uv run sumry data.parquet
+sumry data.parquet
 
 # Summarize the first GeoPackage layer and list available layers
-uv run sumry data.gpkg
+sumry data.gpkg
 
 # Select GeoPackage layers by name or zero-based index
-uv run sumry data.gpkg --select "roads,buildings" -v -n 5
-uv run sumry data.gpkg --select 0 --json
+sumry data.gpkg --select "roads,buildings" -v -n 5
+sumry data.gpkg --select 0 --json
 
 # Summarize a Shapefile
-uv run sumry boundaries.shp
+sumry boundaries.shp
 ```
 
 ### Command-line Options
 
 ```bash
 # List supported file formats
-uv run sumry --formats
-uv run sumry -f
+sumry --formats
+sumry -f
 
 # Verbose mode - show additional statistics and sample values
-uv run sumry data.csv --verbose
-uv run sumry data.csv -v
+sumry data.csv --verbose
+sumry data.csv -v
 
-# Display sample records (default: 5 rows)
-uv run sumry data.csv --count 10
-uv run sumry data.csv -n 10
+# Display 10 sample records
+sumry data.csv --count 10
+sumry data.csv -n 10
 
 # Select specific Excel sheets
-uv run sumry spreadsheet.xlsx --select "Sheet1,Sheet3"
-uv run sumry spreadsheet.xlsx -s "Sheet1"
+sumry spreadsheet.xlsx --select "Sheet1,Sheet3"
+sumry spreadsheet.xlsx -s "Sheet1"
 
 # Output as JSON
-uv run sumry data.csv --json
-uv run sumry data.csv -j
+sumry data.csv --json
+sumry data.csv -j
 
 # Combine options
-uv run sumry data.csv -v -n 5 --json
+sumry data.csv -v -n 5 --json
 ```
 
 ## Output Examples
@@ -121,13 +172,13 @@ Export summaries in JSON format for integration with other tools:
 
 ```bash
 # Output JSON to file
-uv run sumry data.csv --json > summary.json
+sumry data.csv --json > summary.json
 
 # Pipe to jq for processing
-uv run sumry data.csv --json | jq '.columns[] | .name'
+sumry data.csv --json | jq '.columns[] | .name'
 
 # Get just the basic info
-uv run sumry data.csv --json | jq '.basic_info'
+sumry data.csv --json | jq '.basic_info'
 ```
 
 JSON output includes:
@@ -152,14 +203,14 @@ output. Raster tiles are not summarized.
 ### Rasters, point clouds, and tile archives
 
 ```bash
-uv run sumry elevation.tif
-uv run sumry imagery.cog.tif -v -n 5 --json
-uv run sumry imagery.jp2 -v
-uv run sumry scan.tiff                 # companion worldfile is read automatically
-uv run sumry survey.las -v -n 5
-uv run sumry survey.copc.laz --json
-uv run sumry basemap.pmtiles -v -n 5
-uv run sumry buildings.fgb -v -n 5
+sumry elevation.tif
+sumry imagery.cog.tif -v -n 5 --json
+sumry imagery.jp2 -v
+sumry scan.tiff                 # companion worldfile is read automatically
+sumry survey.las -v -n 5
+sumry survey.copc.laz --json
+sumry basemap.pmtiles -v -n 5
+sumry buildings.fgb -v -n 5
 ```
 
 - **GeoTIFF, COG, TIFF + worldfile, JPEG2000:** dimensions, bands, data types,
@@ -242,16 +293,94 @@ JPEG2000 requires a supporting GDAL driver, included in standard Rasterio wheels
 
 ## Development
 
+Install uv and Git, then clone the repository and set up the project environment:
+
 ```bash
-# Install in development mode
+git clone https://github.com/gridcell/sumry.git
+cd sumry
 uv sync
+```
 
-# Run tests (if available)
+`uv sync` installs the project in editable mode into `.venv`, using `uv.lock`
+and updating it if the project metadata has changed. The `.python-version` file selects Python 3.12. Source edits are
+picked up on the next run; no reinstall or environment activation is needed.
+
+### Run locally
+
+From the repository root:
+
+```bash
+uv run sumry --help
+uv run sumry test_data/sample.csv
+uv run sumry test_data/sample.csv -v -n 5 --json
+uv run sumry test_data/sample.geojson
+```
+
+Use `uv run sumry` when working on the checkout so you run that checkout's code
+and dependencies. To also expose the editable checkout as `sumry` in any directory:
+
+```bash
+uv tool install --force --editable .
+uv tool update-shell
+```
+
+Restart your terminal if needed, and keep the checkout in place while using this
+editable installation. The tool has its own environment; rerun the installation
+command if you change dependencies.
+
+### Run tests
+
+The test suite uses Python's built-in `unittest` runner:
+
+```bash
 uv run python -m unittest discover -s tests -v
+```
 
-# Build the package
+### Build a distribution
+
+```bash
 uv build
 ```
+
+This writes a wheel (`.whl`) and source archive (`.tar.gz`) to `dist/`. To install a
+built wheel as a terminal tool, substitute its actual filename below:
+
+```bash
+uv tool install --force /path/to/sumry-version-py3-none-any.whl
+```
+
+### Publish a release to PyPI
+
+The [publish workflow](.github/workflows/publish.yml) builds and publishes a wheel
+and source distribution when a tag matching `vX.X.X` is pushed to GitHub. The tag
+must match `project.version` in `pyproject.toml`; mismatches fail before publishing.
+Prerelease tags such as `v1.2.3rc1` do not trigger publishing.
+
+One-time setup:
+
+1. Create a GitHub environment named `pypi` in `sparkgeo/sumry` under
+   **Settings → Environments**. Leave required reviewers disabled for automatic
+   publishing on tag pushes.
+2. In the PyPI `sumry` project's **Publishing** settings, add a
+   [Trusted Publisher](https://docs.pypi.org/trusted-publishers/adding-a-publisher/)
+   with owner `sparkgeo`, repository `sumry`, workflow filename `publish.yml`,
+   and environment `pypi`. If the project does not exist yet, register a pending
+   publisher at <https://pypi.org/manage/account/publishing/> with project name
+   `sumry` and the same settings. No PyPI API token or GitHub secret is needed.
+
+For each release, update `project.version` in `pyproject.toml`, run `uv lock`,
+and commit the version and lockfile changes along with the release contents.
+Push the commit, then create and push the matching tag (replace `0.5.3` with
+the version being released):
+
+```bash
+git tag v0.5.3
+git push origin v0.5.3
+```
+
+The tagged commit must contain the workflow. Follow the run in GitHub's
+**Actions** tab. Each release needs a new version; PyPI does not allow replacing
+previously published distribution files.
 
 ## License
 
