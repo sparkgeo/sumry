@@ -1,6 +1,6 @@
 [project]
 name = "sumry"
-version = "0.2.0"
+version = "0.5.1"
 description = "CLI utility for summarizing tables, vectors, rasters, point clouds, and tile archives"
 readme = "README.md"
 requires-python = ">=3.11"

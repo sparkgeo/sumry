@@ -347,41 +347,57 @@ def _display_sheet_summary(summary: dict, verbose: bool, sample_count: Optional[
     # Display sample data if count option is used
     if sample_count is not None and "sample_data" in summary:
         console.print(Rule(f"[bold bright_yellow]📝 Sample Records (showing {len(summary['sample_data'])})[/bold bright_yellow]", style="bright_yellow"))
-        sample_table = Table(
-            show_header=True,
-            box=ROUNDED,
-            border_style="bright_yellow",
-            header_style="bold yellow",
-            show_lines=True,
-            row_styles=["none", "dim"]
-        )
-        
-        # Add columns based on the data
-        if summary["sample_data"]:
-            # Get column names from first row
-            columns = list(summary["sample_data"][0].keys())
-            for col in columns:
-                sample_table.add_column(col, style="bright_white", no_wrap=False, overflow="ellipsis")
-            
-            # Add data rows
-            for row in summary["sample_data"]:
-                row_data = []
-                for col in columns:
-                    val = row.get(col, "")
-                    val_str = str(val) if val != "" else "[dim]—[/dim]"
-                    
-                    # Add syntax highlighting for different data types
-                    if isinstance(val, bool):
-                        val_str = f"[bold green]{val}[/bold green]" if val else f"[bold red]{val}[/bold red]"
-                    elif isinstance(val, (int, float)):
-                        val_str = f"[bold yellow]{val}[/bold yellow]"
-                    elif val == "":
-                        val_str = "[dim italic]null[/dim italic]"
-                    
-                    row_data.append(val_str)
-                sample_table.add_row(*row_data)
-        
-        console.print(sample_table)
+        _display_sample_records(summary["sample_data"])
+
+
+def _sample_value(value) -> Text:
+    """Render source values literally, preserving their existing type colors."""
+    if isinstance(value, bool):
+        return Text(str(value), style="bold green" if value else "bold red")
+    if isinstance(value, (int, float)):
+        return Text(str(value), style="bold yellow")
+    if isinstance(value, str) and value == "":
+        return Text("null", style="dim italic")
+    return Text(str(value))
+
+
+def _display_sample_records(records: list[dict]):
+    if not records:
+        console.print(Text("No sample records.", style="dim"))
+        return
+
+    columns = list(dict.fromkeys(key for row in records for key in row))
+    headers = [Text(str(column)) for column in columns]
+    rows = [[_sample_value(row.get(column, "")) for column in columns] for row in records]
+    # Include padding and borders when checking whether all values fit naturally.
+    widths = [
+        max(line.cell_len for cell in [header, *(row[index] for row in rows)]
+            for line in cell.split("\n"))
+        for index, header in enumerate(headers)
+    ]
+    wide = sum(widths) + 3 * len(columns) + 1 > console.width
+
+    def make_table(**kwargs):
+        return Table(box=ROUNDED, border_style="bright_yellow",
+                     header_style="bold yellow", show_lines=True, **kwargs)
+
+    if wide:
+        for index, row in enumerate(rows, 1):
+            table = make_table(title=f"Record {index}")
+            table.add_column("Field", style="bold yellow", overflow="fold",
+                             max_width=max(1, (console.width - 7) // 3))
+            table.add_column("Value", style="bright_white", overflow="fold", ratio=1)
+            for header, value in zip(headers, row):
+                table.add_row(header, value)
+            console.print(table)
+    else:
+        table = make_table(row_styles=["none", "dim"])
+        for header in headers:
+            table.add_column(header, style="bright_white", overflow="fold")
+        for row in rows:
+            table.add_row(*row)
+        console.print(table)
+
 
 
 if __name__ == "__main__":
